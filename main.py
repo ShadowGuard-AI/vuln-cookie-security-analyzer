@@ -25,6 +25,9 @@ class CookieSecurityAnalyzer:
         self.timeout = timeout
         self.status_code = None
         self.cookies = {}
+        # netloc keeps any port, and I never compare domain against the
+        # cookies themselves. This exists only as a shape check: no host in
+        # the URL means there is nothing sensible to request.
         self.domain = urlparse(url).netloc
         if not self.domain:
             raise ValueError(f"Invalid URL: {url}")
@@ -40,6 +43,9 @@ class CookieSecurityAnalyzer:
             self.status_code = response.status_code
             logging.info(f"Response status for {self.url}: {self.status_code}")
 
+            # Only the final response's cookies are kept. Cookies set by an
+            # earlier response in a redirect chain and then replaced are not
+            # in this jar by the time I look, so they are never analyzed.
             self.cookies = response.cookies
             if not self.cookies:
                 logging.warning(f"No cookies found for {self.url}")
@@ -61,6 +67,10 @@ class CookieSecurityAnalyzer:
         for cookie in self.cookies:
             name = cookie.name
             # Cookie values are never read or printed; names and flags only.
+            # requests parks cookie attributes in _rest with whatever casing
+            # the server sent, so I lower the keys before looking anything
+            # up. HttpOnly gets two extra checks because some servers send
+            # it as a bare flag that lands outside _rest entirely.
             rest = {str(k).lower(): v for k, v in getattr(cookie, "_rest", {}).items()}
             http_only = "httponly" in rest or cookie.has_nonstandard_attr('HttpOnly') or cookie.has_nonstandard_attr('httponly')
             secure = cookie.secure
@@ -68,6 +78,10 @@ class CookieSecurityAnalyzer:
 
             if not http_only:
                 vulnerabilities.append(f"Cookie '{name}' is missing HttpOnly flag.  Potential risk of XSS attacks.")
+            # The gate reads the URL I was given, not the final URL after
+            # redirects. A plain http target that redirects to https never
+            # earns this warning, which keeps http scans free of noise about
+            # a flag that only matters on a secure origin.
             if not secure and self.url.startswith('https'): #Only warn if using HTTPS
                 vulnerabilities.append(f"Cookie '{name}' is missing Secure flag.  Potential risk of man-in-the-middle attacks over non-HTTPS connections.")
             if not same_site:

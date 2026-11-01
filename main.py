@@ -14,7 +14,7 @@ class CookieSecurityAnalyzer:
     A class to analyze cookies for security flags (HttpOnly, Secure, SameSite) and report potential vulnerabilities.
     """
 
-    def __init__(self, url):
+    def __init__(self, url, timeout=10):
         """
         Initializes the CookieSecurityAnalyzer with the target URL.
 
@@ -22,6 +22,8 @@ class CookieSecurityAnalyzer:
             url (str): The URL to analyze.
         """
         self.url = url
+        self.timeout = timeout
+        self.status_code = None
         self.cookies = {}
         self.domain = urlparse(url).netloc
         if not self.domain:
@@ -33,8 +35,10 @@ class CookieSecurityAnalyzer:
         Fetches cookies from the target URL.
         """
         try:
-            response = self.session.get(self.url, allow_redirects=True)  # Allow redirects
-            response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+            # No raise_for_status: cookies on error responses are analyzed too.
+            response = self.session.get(self.url, allow_redirects=True, timeout=self.timeout)
+            self.status_code = response.status_code
+            logging.info(f"Response status for {self.url}: {self.status_code}")
 
             self.cookies = response.cookies
             if not self.cookies:
@@ -54,16 +58,13 @@ class CookieSecurityAnalyzer:
             return []
         
         vulnerabilities = []
-        for name, value in self.cookies.items():
-            cookie = self.cookies.get(name)  # Use get to avoid KeyError
-
-            if cookie is None:
-                logging.warning(f"Cookie {name} is unexpectedly None.")
-                continue
-
-            http_only = cookie.has_nonstandard_attr('httponly')
+        for cookie in self.cookies:
+            name = cookie.name
+            # Cookie values are never read or printed; names and flags only.
+            rest = {str(k).lower(): v for k, v in getattr(cookie, "_rest", {}).items()}
+            http_only = "httponly" in rest or cookie.has_nonstandard_attr('HttpOnly') or cookie.has_nonstandard_attr('httponly')
             secure = cookie.secure
-            same_site = cookie.get('samesite')
+            same_site = rest.get('samesite')
 
             if not http_only:
                 vulnerabilities.append(f"Cookie '{name}' is missing HttpOnly flag.  Potential risk of XSS attacks.")
@@ -101,6 +102,7 @@ def setup_argparse():
     parser = argparse.ArgumentParser(description="Analyze cookies for security flags.")
     parser.add_argument("url", help="The URL to analyze.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging.")
+    parser.add_argument("--timeout", type=float, default=10, help="Timeout in seconds for the request. Default: 10")
     return parser
 
 def main():
@@ -114,8 +116,12 @@ def main():
         logging.getLogger().setLevel(logging.DEBUG)
 
     try:
-        analyzer = CookieSecurityAnalyzer(args.url)
+        analyzer = CookieSecurityAnalyzer(args.url, timeout=args.timeout)
         if not analyzer.fetch_cookies():
+            sys.exit(1)
+
+        if not analyzer.cookies:
+            print(f"No cookies were set by {args.url} (status {analyzer.status_code}); nothing was analyzed, so no cookie security verdict is available.")
             sys.exit(1)
 
         vulnerabilities = analyzer.analyze_cookies()

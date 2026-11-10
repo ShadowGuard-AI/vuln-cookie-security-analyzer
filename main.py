@@ -129,6 +129,10 @@ def main():
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
+    if args.timeout <= 0:
+        logging.error("Timeout must be greater than 0.")
+        sys.exit(1)
+
     try:
         analyzer = CookieSecurityAnalyzer(args.url, timeout=args.timeout)
         if not analyzer.fetch_cookies():
@@ -153,5 +157,5 @@ if __name__ == "__main__":
     main()
 
 #Example usage:
-# To run the tool:  python vuln_cookie_security_analyzer.py https://example.com
-# To run with verbose logging: python vuln_cookie_security_analyzer.py -v https://example.com
+# To run the tool:  python main.py https://example.com
+# To run with verbose logging: python main.py -v https://example.com
